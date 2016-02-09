@@ -1,20 +1,22 @@
 'use strict'
-let WebSocketServer = require('ws').Server
-const PORT = 8000
-const UNSUPPORTED_DATA = 1007
-const POLICY_VIOLATION = 1008
-const CLOSE_UNSUPPORTED = 1003
+var WebSocketServer = require('ws').Server
+var PORT = 8000
+var UNSUPPORTED_DATA = 1007
+var POLICY_VIOLATION = 1008
+var CLOSE_UNSUPPORTED = 1003
 
-let server = new WebSocketServer({port: PORT}, () => {
+var server = new WebSocketServer({port: PORT}, function () {
   console.log('Server runs on: ws://localhost:' + PORT)
 })
 
-server.on('connection', (socket) => {
-  socket.on('message', (data) => {
+server.on('connection', function (socket) {
+  socket.on('message', function (data) {
     try {
-      let msg = JSON.parse(data)
+      var msg = JSON.parse(data)
+      var i, id, master
       if (msg.hasOwnProperty('key')) {
-        for (let master of server.clients) {
+        for (i in server.clients) {
+          master = server.clients[i]
           if (master.key === msg.key) {
             socket.close(POLICY_VIOLATION, 'The key already exists')
             return
@@ -23,7 +25,7 @@ server.on('connection', (socket) => {
         socket.key = msg.key
         socket.joiningClients = []
       } else if (msg.hasOwnProperty('id')) {
-        for (let index in socket.joiningClients) {
+        for (var index in socket.joiningClients) {
           if (index == msg.id) {
             socket.joiningClients[index].send(JSON.stringify({data: msg.data}))
             return
@@ -31,19 +33,20 @@ server.on('connection', (socket) => {
         }
         socket.close(POLICY_VIOLATION, 'Unknown id')
       } else if (msg.hasOwnProperty('join')) {
-        for (let master of server.clients) {
+        for (i in server.clients) {
+          master = server.clients[i]
           if (master.key === msg.join) {
             socket.master = master
             master.joiningClients.push(socket)
-            let id = master.joiningClients.length - 1
-            master.send(JSON.stringify({id, data: msg.data}))
+            id = master.joiningClients.length - 1
+            master.send(JSON.stringify({id: id, data: msg.data}))
             return
           }
         }
         socket.close(POLICY_VIOLATION, 'Unknown key')
       } else if (msg.hasOwnProperty('data') && socket.hasOwnProperty('master')) {
-        let id = socket.master.joiningClients.indexOf(socket)
-        socket.master.send(JSON.stringify({id, data: msg.data}))
+        id = socket.master.joiningClients.indexOf(socket)
+        socket.master.send(JSON.stringify({id: id, data: msg.data}))
       } else {
         socket.close(UNSUPPORTED_DATA, 'Unsupported message format')
       }
@@ -52,10 +55,10 @@ server.on('connection', (socket) => {
     }
   })
 
-  socket.on('close', (event) => {
+  socket.on('close', function (event) {
     if (socket.hasOwnProperty('joiningClients')) {
-      for (let client of socket.joiningClients) {
-        client.close(POLICY_VIOLATION, 'The peer is no longer available')
+      for (var i in socket.joiningClients) {
+        socket.joiningClients[i].close(POLICY_VIOLATION, 'The peer is no longer available')
       }
     }
   })
