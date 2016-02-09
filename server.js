@@ -1,11 +1,12 @@
 'use strict'
 var WebSocketServer = require('ws').Server
 var PORT = process.env.OPENSHIFT_NODEJS_PORT || 3000
+var HOST = process.env.OPENSHIFT_NODEJS_IP
 var UNSUPPORTED_DATA = 1007
 var POLICY_VIOLATION = 1008
 var CLOSE_UNSUPPORTED = 1003
 
-var server = new WebSocketServer({port: PORT})
+var server = new WebSocketServer({host: HOST, port: PORT})
 
 server.on('connection', function (socket) {
   socket.on('message', function (data) {
