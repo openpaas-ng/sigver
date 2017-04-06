@@ -2,11 +2,11 @@
 (function () {
 'use strict';
 
-class SigverError {
-  constructor (code, message) {
-    Error.captureStackTrace(this, this.constructor);
+class SigverError extends Error {
+  constructor (code, message = '') {
+    super();
     this.code = code;
-    this.message = `${this.getCodeText()}=${this.code}: ${message}`;
+    this.message = `${this.getCodeText()}: ${message}`;
     this.name = this.constructor.name;
   }
 
@@ -16,9 +16,10 @@ class SigverError {
   // Unapropriate key format (e.g. key too long).
   static get KEY_ERROR () { return 4001 }
 
-  // Before starting transmit data, the first request should be either 'open' or 'join'.
-  static get TRANSMIT_BEFORE_OPEN () { return 4010 }
-  static get TRANSMIT_BEFORE_JOIN () { return 4011 }
+  // Pong message is not received during a certain delay.
+  static get PING_ERROR () { return 4002 }
+
+  static get RESPONSE_TIMEOUT_ERROR () { return 4003 }
 
   /*
    The Cross-Origin Resource Sharing error. Occurs when the request
@@ -36,11 +37,11 @@ class SigverError {
     switch (this.code) {
       case SigverError.MESSAGE_ERROR: return 'MESSAGE_ERROR'
       case SigverError.KEY_ERROR: return 'KEY_ERROR'
-      case SigverError.TRANSMIT_BEFORE_OPEN: return 'TRANSMIT_BEFORE_OPEN'
-      case SigverError.TRANSMIT_BEFORE_JOIN: return 'TRANSMIT_BEFORE_JOIN'
+      case SigverError.PING_ERROR: return 'PING_ERROR'
+      case SigverError.RESPONSE_TIMEOUT_ERROR: return 'RESPONSE_TIMEOUT_ERROR'
       case SigverError.CROS_ERROR: return 'CROSS_ORIGIN_RESOURCE_SHARING_ERROR'
       case SigverError.AUTH_ERROR: return 'AUTHENTICATION_ERROR'
-      default: throw new Error('Unknown SigverError code')
+      default: return this.code
     }
   }
 }
@@ -52,13 +53,14 @@ const KEY_LENGTH_LIMIT = 512;
  * JSON strings, otherwise throw an error.
  */
 class IOJsonString {
-
   constructor (data) {
     this.id = undefined;
     this.data = undefined;
 
     this._openKey = undefined;
     this._joinKey = undefined;
+    this.ping = false;
+    this.pong = false;
     let msg;
     try {
       msg = JSON.parse(data);
@@ -72,14 +74,20 @@ class IOJsonString {
     } else if ('join' in msg && keysNb === 1) {
       this.validateKey(msg.join);
       this._joinKey = msg.join;
-    } else if ('data' in msg && keysNb === 1) {
+    } else if ('data' in msg) {
       this.data = JSON.stringify(msg.data);
-    } else if ('id' in msg && 'data' in msg && keysNb === 2) {
-      this.validateId(msg.id);
-      this.data = JSON.stringify(msg.data);
-      this.id = msg.id;
+      if ('id' in msg && keysNb === 2) {
+        this.validateId(msg.id);
+        this.id = msg.id;
+      } else if (keysNb !== 1) {
+        throw new SigverError(SigverError.MESSAGE_ERROR, 'Unknown message: ' + data)
+      }
+    } else if ('ping' in msg && msg.ping && keysNb === 1) {
+      this.ping = true;
+    } else if ('pong' in msg && msg.pong && keysNb === 1) {
+      this.pong = true;
     } else {
-      throw new SigverError(SigverError.MESSAGE_ERROR, 'Unknown message')
+      throw new SigverError(SigverError.MESSAGE_ERROR, 'Unknown message: ' + data)
     }
   }
 
@@ -87,26 +95,32 @@ class IOJsonString {
 
   isToJoin () { return this._joinKey !== undefined }
 
-  isToTransmitToOpener () { return this.id === undefined }
+  isToTransmit () { return this.data !== undefined }
 
-  isToTransmitToJoining () { return this.id !== undefined }
+  isPing () { return this.ping }
+
+  isPong () { return this.pong }
 
   get key () { return this._openKey ? this._openKey : this._joinKey }
 
   static msgUnavailable (id) {
-    return id ? `{"unavailable":${id}}` : `{"unavailable":-1}`
+    return id ? `{"unavailable":"${id}"}` : `{"unavailable":"0"}`
   }
 
-  static msgOpened (opened) {
-    return `{"opened":${opened}}`
+  static msgFirst (first) {
+    return `{"first":${first}}`
   }
 
-  msgToJoining () {
-    return `{"data":${this.data}}`
+  static msgPing () {
+    return '{"ping":true}'
   }
 
-  msgToOpener (id) {
-    return `{"id":${id},"data":${this.data}}`
+  static msgPong () {
+    return '{"pong":true}'
+  }
+
+  msgTransmit (id) {
+    return id ? `{"id":"${id}","data":${this.data}}` : `{"data":${this.data}}`
   }
 
   validateKey (key) {
@@ -124,167 +138,82 @@ class IOJsonString {
   }
 
   validateId (id) {
-    if (typeof id !== 'number') {
-      throw new SigverError(SigverError.MESSAGE_ERROR, `The joining id is not a number`)
-    }
-  }
-
-}
-
-class Joining {
-  constructor (source, opener, id) {
-    this.source = source;
-    this.source.$joining = this;
-    this.opener = opener;
-    this.id = id;
-    this._opened = true;
-    this.source.onclose = closeEvt => {
-      this._opened = false;
-      if (this.opener) {
-        this.opener.deleteJoining(this);
-      }
-    };
-  }
-
-  get opened () {
-    if ('readyState' in this.source && 'OPEN' in this.source) {
-      return this.source.readyState === this.source.OPEN
-    } else {
-      return this._opened
+    if (typeof id !== 'string') {
+      throw new SigverError(SigverError.MESSAGE_ERROR, `The joining id is not a string`)
     }
   }
 }
 
-const MAX_ID = 2147483647; // int32 max value for id generation
+const bunyan = require('bunyan');
 
-class Opener {
-  constructor (source) {
-    source.$opener = this;
-    this.source = source;
-    this.joinings = new Map();
-    this.onclose = () => {};
-    this._opened = true;
+const log = bunyan.createLogger({name: 'sigver'});
 
-    this.source.onclose = closeEvt => {
-      this._opened = false;
-      this.onclose();
-      this.joinings.forEach(j => { j.opener = undefined; });
-    };
-  }
+const PING_INTERVAL = 5000;
+const shortid = require('shortid');
 
-  get opened () {
-    if ('readyState' in this.source && 'OPEN' in this.source) {
-      return this.source.readyState === this.source.OPEN
-    } else {
-      return this._opened
-    }
-  }
-
-  getJoining (id) {
-    return this.joinings.get(id)
-  }
-
-  addJoining (source) {
-    const id = this.generateId();
-    const joining = new Joining(source, this, id);
-    this.joinings.set(id, joining);
-    return joining
-  }
-
-  deleteJoining (joining) {
-    this.joinings.delete(joining.id);
-  }
-
-  generateId () {
-    let id;
-    do {
-      id = Math.ceil(Math.random() * MAX_ID);
-      if (this.joinings.has(id)) continue
-      break
-    } while (true)
-    return id
-  }
-}
-
-const openers = new Map();
-
-/**
- * The core of the signaling server (WebSocket and SSE) containing the main logic
- */
-class ServerCore {
-
+class Channel extends require('rxjs/Rx').Subject {
   constructor () {
-    this.server = null;
+    super();
+    this.id = shortid.generate();
+    this.subscriptionToOpener = undefined;
+    this.key = undefined;
+    this.send = undefined;
+    this.timeout = undefined;
+    this.pongReceived = false;
   }
 
-  handleMessage (source, ioMsg) {
-    if (ioMsg.isToOpen()) {
-      this.open(source, ioMsg);
-    } else if (ioMsg.isToJoin()) {
-      // While trying to join, if the key exists, then join. If the key does
-      // not exist, then do as if the client want to open.
-      if (openers.has(ioMsg.key)) {
-        this.join(source, ioMsg);
+  init (key) {
+    this.key = key;
+    if (this.subscriptionToOpener) {
+      this.subscriptionToOpener.unsubscribe();
+      this.subscriptionToOpener = undefined;
+    }
+  }
+
+  startPing () {
+    this.send(IOJsonString.msgPing());
+    const timeout = setInterval(() => {
+      if (!this.pongReceived) {
+        this.error(new SigverError(SigverError.PING_ERROR));
+        clearInterval(timeout);
       } else {
-        this.open(source, ioMsg);
+        this.pongReceived = false;
+        this.send(IOJsonString.msgPing());
       }
-    } else if (ioMsg.isToTransmitToOpener()) {
-      this.transmitToOpener(source, ioMsg);
-    } else if (ioMsg.isToTransmitToJoining()) {
-      this.transmitToJoining(source, ioMsg);
+    }, PING_INTERVAL);
+  }
+
+  stopPing () {
+    if (this.timeout !== undefined) {
+      clearInterval(this.timeout);
     }
   }
 
-  open (source, ioMsg) {
-    const opener = new Opener(source);
-    if (openers.has(ioMsg.key)) {
-      openers.get(ioMsg.key).add(opener);
+  pipe (channel) {
+    if (this.key === undefined) {
+      this.subscriptionToOpener = channel.filter(ioMsg => ioMsg.isToTransmit() && ioMsg.id === this.id)
+        .subscribe(
+          ioMsg => this.send(ioMsg.msgTransmit()),
+          err => {
+            log.error('Channel', { id: this.id, isOpener: false, subscribedToId: channel.id, err: err.message });
+            this.send(IOJsonString.msgUnavailable(channel.id));
+          },
+          () => this.send(IOJsonString.msgUnavailable(channel.id))
+        );
     } else {
-      const setOfOpeners = new Set();
-      setOfOpeners.add(opener);
-      openers.set(ioMsg.key, setOfOpeners);
-    }
-    source.send(IOJsonString.msgOpened(true));
-    opener.onclose = closeEvt => {
-      const setOfOpeners = openers.get(ioMsg.key);
-      setOfOpeners.delete(opener);
-      if (setOfOpeners.size === 0) {
-        openers.delete(ioMsg.key);
-      }
-    };
-  }
-
-  join (source, ioMsg) {
-    openers.get(ioMsg.key).values().next().value.addJoining(source);
-    source.send(IOJsonString.msgOpened(false));
-  }
-
-  transmitToJoining (source, ioMsg) {
-    if (!('$opener' in source)) {
-      throw new SigverError(SigverError.TRANSMIT_BEFORE_OPEN, 'Transmitting data before open')
-    }
-    const joining = source.$opener.getJoining(ioMsg.id);
-    if (joining === undefined || !joining.opened) {
-      source.$opener.source.send(IOJsonString.msgUnavailable(ioMsg.id));
-    }
-    joining.source.send(ioMsg.msgToJoining());
-  }
-
-  transmitToOpener (source, ioMsg) {
-    if (!('$joining' in source)) {
-      throw new SigverError(SigverError.TRANSMIT_BEFORE_JOIN, 'Transmitting data before join')
-    }
-    const opener = source.$joining.opener;
-    if (opener === undefined || !opener.opened) {
-      source.$joining.source.send(IOJsonString.msgUnavailable());
-    }
-    opener.source.send(ioMsg.msgToOpener(source.$joining.id));
-  }
-
-  close (cb) {
-    if (this.server !== null) {
-      console.log('Server has stopped successfully');
-      this.server.close(cb);
+      channel.filter(ioMsg => ioMsg.isToTransmit())
+        .subscribe(
+          ioMsg => this.send(ioMsg.msgTransmit(channel.id)),
+          err => {
+            log.error('Channel', { id: this.id, isOpener: true, subscribedToId: channel.id, err: err.message });
+            if (err.code && err.code === SigverError.RESPONSE_TIMEOUT_ERROR) {
+              this.error(err);
+            } else {
+              this.send(IOJsonString.msgUnavailable(channel.id));
+            }
+          },
+          () => this.send(IOJsonString.msgUnavailable(channel.id))
+        );
     }
   }
 }
@@ -292,7 +221,11 @@ class ServerCore {
 /**
  * WebSocket server able to use ws or uws modules.
  */
-class WsServer extends ServerCore {
+class WsServer {
+  constructor () {
+    const Subject = require('rxjs/Rx').Subject;
+    this.onChannel = new Subject();
+  }
 
   /**
    * Start the server.
@@ -302,6 +235,10 @@ class WsServer extends ServerCore {
    * @param {string} extraOptions.wsLib Specify which module to use (ws or uws)
    */
   start (options, cb = () => {}, extraOptions) {
+    const defaultOptions = {
+      perMessageDeflate: false
+    };
+    const settings = Object.assign({}, defaultOptions, options);
     let WebSocket = {};
     try {
       WebSocket = require(extraOptions.wsLib);
@@ -318,174 +255,121 @@ class WsServer extends ServerCore {
     const WebSocketServer = WebSocket.Server;
 
     // Starting server
-    this.server = new WebSocketServer(options, cb);
+    this.server = new WebSocketServer(settings, cb);
 
-    this.server.on('error', err => console.error(`Server error: ${err}`));
+    this.server.on('error', err => {
+      console.error(`Server error: ${err}`);
+      this.onChannel.error(err);
+    });
 
     this.server.on('connection', socket => {
-      socket.onerror = err => {
-        console.log(`Socket error while sending ${err.code}: ${err.reason}`);
-      };
-      socket.onmessage = msgEvent => {
+      const channel = new Channel(socket);
+      socket.onmessage = evt => {
         try {
-          // Handle client message
-          super.handleMessage(socket, new IOJsonString(msgEvent.data));
+          channel.next(new IOJsonString(evt.data));
         } catch (err) {
-          if (err.name !== 'SigverError') {
-            console.log(`WebSocketServer: Error which not a SigverError instance: : ${err.message}`, err.stack);
-          } else {
-            console.log(err.message);
-            socket.close(err.code, err.message);
-          }
+          socket.close(err.code, err.message);
         }
       };
-    });
-  }
-}
-
-/**
- * A wrapper around ServerResponse object to simulate Socket API.
- */
-class SseResponseWrapper {
-  constructor (id, sse, res) {
-    this.id = id;
-    this.sse = sse;
-    this.res = res;
-    this.res.$channel = this;
-    this.onclose = () => {};
-  }
-
-  close () {
-    this.onclose();
-  }
-
-  send (msg) {
-    this.sse.send(msg, [this.res]);
-  }
-
-}
-
-let SseChannel = {};
-try {
-  SseChannel = require('sse-channel');
-} catch (err) {
-  console.log('INFO: sse-channel module is not installed properly, thus EventSource server cannot be run');
-}
-const http = require('http');
-
-const MAX_ID$1 = 2147483647; // int32 max value for id generation
-
-const sse = new SseChannel({
-  cors: {
-    origins: ['*'],
-    credentials: true
-  }
-});
-sse.on('disconnect', (channel, res) => {
-  if ('$channel' in res) {
-    res.$channel.close();
-  } else {
-    throw new Error('Error on sse client disconnect. This should not be happend, check usage of sse.addClient')
-  }
-});
-const resps = new Map();
-
-/**
- * Server-Sent-Event server. Client should use EventSource API together
- * with Ajax (Fetch or XMLHttpRequest API for example). EventSource is
- * used for server to notify client and Ajax is used by client to send
- * data to the server.
- */
-class SseServer extends ServerCore {
-
-  start (options, cb = () => {}) {
-    // Starting server
-    this.server = http.createServer((req, res) => {
-      if (req.url === '/') {
-        switch (req.method) {
-          /*
-           Authentication. This should be the first request by the client,
-           made with EventSource API.
-           */
-          case 'GET': {
-            sse.addClient(req, res, err => {
-              if (err) {
-                console.log('SseServer: ' + new SigverError(SigverError.CROS_ERROR, err.message).message);
-              } else {
-                const sseChannel = new SseResponseWrapper(generateId(), sse, res);
-                resps.set(sseChannel.id, sseChannel);
-                sseChannel.send({event: 'auth', data: sseChannel.id});
-              }
-            });
-            break
-          }
-          /*
-           After client has been authenticated with the request above, he can
-           send data to the server with POST request. The Authentication token,
-           abtained previously should always be included into this request content.
-           */
-          case 'POST': {
-            let body = [];
-            req.on('data', chunk => body.push(chunk));
-            req.on('end', () => {
-              body = Buffer.concat(body).toString();
-              let resWrapper;
-              try {
-                const separator = body.indexOf('@');
-                resWrapper = resps.get(Number.parseInt(body.substring(0, separator), 10));
-                if (resWrapper === undefined) {
-                  throw new SigverError(SigverError.AUTH_ERROR, 'Send message before authentication')
-                }
-                const data = body.substring(separator + 1);
-
-                super.handleMessage(resWrapper, new IOJsonString(data));
-              } catch (err) {
-                if (err.name !== 'SigverError') {
-                  console.log(`SseServer: Error is not a SigverError instance: ${err.message}`);
-                } else {
-                  console.log(`SseServer: ${err.message}`);
-                }
-                if (resWrapper !== undefined) {
-                  resWrapper.send({
-                    event: 'close',
-                    data: JSON.stringify({ code: err.code, reason: err.message })
-                  });
-                  sse.removeClient(resWrapper.res);
-                }
-              } finally {
-                res.writeHead(200, {'Access-Control-Allow-Origin': req.headers.origin});
-                res.end();
-              }
-            });
-            break
-          }
-          default:
-            res404(res, req.headers.origin);
+      socket.onerror = err => channel.error(err);
+      socket.onclose = closeEvt => {
+        if (closeEvt.code === 1000) {
+          channel.complete();
+        } else {
+          channel.error(new SigverError(closeEvt.code, closeEvt.reason));
         }
-      } else {
-        res404(res, req.headers.origin);
-      }
+      };
+      channel.send = msg => socket.send(msg);
+      channel.close = (code, reason) => socket.close(code, reason);
+      this.onChannel.next(channel);
     });
+  }
 
-    this.server.listen(options.port, options.host, cb);
+  close (cb) {
+    if (this.server !== null) {
+      console.log('Server has stopped successfully');
+      this.server.close(cb);
+      this.onChannel.complete();
+    }
   }
 }
 
-function res404 (res, origin) {
-  res.writeHead(404, {'Access-Control-Allow-Origin': origin});
-  res.end();
+const openersByKey = new Map();
+
+/**
+ * The core of the signaling server (WebSocket and SSE) containing the main logic
+ */
+class ServerCore {
+  init (channel) {
+    channel.subscribe(
+      ioMsg => {
+        if (ioMsg.isToOpen()) {
+          this.open(channel, ioMsg);
+        } else if (ioMsg.isToJoin()) {
+          this.join(channel, ioMsg);
+        } else if (ioMsg.isPing()) {
+          channel.send(IOJsonString.msgPong());
+        } else if (ioMsg.isPong()) {
+          channel.pongReceived = true;
+        }
+      },
+      err => {
+        log.error('ServerCore', { id: channel.id, isOpener: channel.key !== undefined, err });
+        this.clean(channel);
+      },
+      () => this.clean(channel)
+    );
+    channel.startPing();
+  }
+
+  open (channel, ioMsg) {
+    channel.init(ioMsg.key);
+    let openers = openersByKey.get(ioMsg.key);
+    if (openers !== undefined) {
+      openers.add(channel);
+    } else {
+      openers = new Set();
+      openers.add(channel);
+      openersByKey.set(ioMsg.key, openers);
+    }
+    log.info('ADD Opener', {op: 'add', id: channel.id, key: channel.key, size: openers.size});
+    channel.send(IOJsonString.msgFirst(true));
+  }
+
+  join (channel, ioMsg) {
+    const opener = this.selectOpener(ioMsg.key);
+    if (opener !== undefined) {
+      opener.pipe(channel);
+      channel.pipe(opener);
+      channel.send(IOJsonString.msgFirst(false));
+    } else {
+      channel.send(IOJsonString.msgFirst(true));
+    }
+  }
+
+  clean (channel) {
+    channel.stopPing();
+    if (channel.key !== undefined) {
+      const openers = openersByKey.get(channel.key);
+      if (openers.size === 1) {
+        openersByKey.delete(channel.key);
+      } else {
+        openers.delete(channel);
+      }
+      log.info('DELETE Opener', {op: 'delete', id: channel.id, key: channel.key, size: openers.size});
+    }
+  }
+
+  selectOpener (key) {
+    const openers = openersByKey.get(key);
+    if (openers === undefined) {
+      return undefined
+    }
+    return openers.values().next().value
+  }
 }
 
-function generateId () {
-  let id;
-  do {
-    id = Math.ceil(Math.random() * MAX_ID$1);
-    if (resps.has(id)) continue
-    break
-  } while (true)
-  return id
-}
-
+// import SseServer from './SseServer'
 const program = require('commander');
 
 let host = process.env.NODE_IP || '0.0.0.0';
@@ -522,21 +406,25 @@ if (program.port) port = program.port;
 if (program.type) type = program.type;
 if (program.wsLib) wsLib = program.wsLib;
 
+const core = new ServerCore();
+
 switch (type) {
   case 'ws': {
     const wsServer = new WsServer();
+    wsServer.onChannel.subscribe(channel => core.init(channel),
+      (err) => console.log('my errorerlsj: ' + err));
     wsServer.start({host, port}, () => {
       console.log(`WebSocket server is listening on: ws://${host}:${port}`);
     }, {wsLib});
     break
   }
-  case 'sse': {
-    const sseServer = new SseServer();
-    sseServer.start({host, port}, () => {
-      console.log(`EventSource server is listening on: http://${host}:${port}`);
-    });
-    break
-  }
+  // case 'sse': {
+  //   const sseServer = new SseServer()
+  //   sseServer.start({host, port}, () => {
+  //     console.log(`EventSource server is listening on: http://${host}:${port}`)
+  //   })
+  //   break
+  // }
 }
 
 }());

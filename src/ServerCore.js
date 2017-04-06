@@ -1,86 +1,77 @@
 import IOJsonString from './IOJsonString'
-import Opener from './Opener'
-import SigverError from './SigverError'
+import log from './log'
 
-const openers = new Map()
+const openersByKey = new Map()
 
 /**
  * The core of the signaling server (WebSocket and SSE) containing the main logic
  */
 export default class ServerCore {
-
-  constructor () {
-    this.server = null
+  init (channel) {
+    channel.subscribe(
+      ioMsg => {
+        if (ioMsg.isToOpen()) {
+          this.open(channel, ioMsg)
+        } else if (ioMsg.isToJoin()) {
+          this.join(channel, ioMsg)
+        } else if (ioMsg.isPing()) {
+          channel.send(IOJsonString.msgPong())
+        } else if (ioMsg.isPong()) {
+          channel.pongReceived = true
+        }
+      },
+      err => {
+        log.error('ServerCore', { id: channel.id, isOpener: channel.key !== undefined, err })
+        this.clean(channel)
+      },
+      () => this.clean(channel)
+    )
+    channel.startPing()
   }
 
-  handleMessage (source, ioMsg) {
-    if (ioMsg.isToOpen()) {
-      this.open(source, ioMsg)
-    } else if (ioMsg.isToJoin()) {
-      // While trying to join, if the key exists, then join. If the key does
-      // not exist, then do as if the client want to open.
-      if (openers.has(ioMsg.key)) {
-        this.join(source, ioMsg)
-      } else {
-        this.open(source, ioMsg)
-      }
-    } else if (ioMsg.isToTransmitToOpener()) {
-      this.transmitToOpener(source, ioMsg)
-    } else if (ioMsg.isToTransmitToJoining()) {
-      this.transmitToJoining(source, ioMsg)
-    }
-  }
-
-  open (source, ioMsg) {
-    const opener = new Opener(source)
-    if (openers.has(ioMsg.key)) {
-      openers.get(ioMsg.key).add(opener)
+  open (channel, ioMsg) {
+    channel.init(ioMsg.key)
+    let openers = openersByKey.get(ioMsg.key)
+    if (openers !== undefined) {
+      openers.add(channel)
     } else {
-      const setOfOpeners = new Set()
-      setOfOpeners.add(opener)
-      openers.set(ioMsg.key, setOfOpeners)
+      openers = new Set()
+      openers.add(channel)
+      openersByKey.set(ioMsg.key, openers)
     }
-    source.send(IOJsonString.msgOpened(true))
-    opener.onclose = closeEvt => {
-      const setOfOpeners = openers.get(ioMsg.key)
-      setOfOpeners.delete(opener)
-      if (setOfOpeners.size === 0) {
-        openers.delete(ioMsg.key)
+    log.info('ADD Opener', {op: 'add', id: channel.id, key: channel.key, size: openers.size})
+    channel.send(IOJsonString.msgFirst(true))
+  }
+
+  join (channel, ioMsg) {
+    const opener = this.selectOpener(ioMsg.key)
+    if (opener !== undefined) {
+      opener.pipe(channel)
+      channel.pipe(opener)
+      channel.send(IOJsonString.msgFirst(false))
+    } else {
+      channel.send(IOJsonString.msgFirst(true))
+    }
+  }
+
+  clean (channel) {
+    channel.stopPing()
+    if (channel.key !== undefined) {
+      const openers = openersByKey.get(channel.key)
+      if (openers.size === 1) {
+        openersByKey.delete(channel.key)
+      } else {
+        openers.delete(channel)
       }
+      log.info('DELETE Opener', {op: 'delete', id: channel.id, key: channel.key, size: openers.size})
     }
   }
 
-  join (source, ioMsg) {
-    openers.get(ioMsg.key).values().next().value.addJoining(source)
-    source.send(IOJsonString.msgOpened(false))
-  }
-
-  transmitToJoining (source, ioMsg) {
-    if (!('$opener' in source)) {
-      throw new SigverError(SigverError.TRANSMIT_BEFORE_OPEN, 'Transmitting data before open')
+  selectOpener (key) {
+    const openers = openersByKey.get(key)
+    if (openers === undefined) {
+      return undefined
     }
-    const joining = source.$opener.getJoining(ioMsg.id)
-    if (joining === undefined || !joining.opened) {
-      source.$opener.source.send(IOJsonString.msgUnavailable(ioMsg.id))
-    }
-    joining.source.send(ioMsg.msgToJoining())
-  }
-
-  transmitToOpener (source, ioMsg) {
-    if (!('$joining' in source)) {
-      throw new SigverError(SigverError.TRANSMIT_BEFORE_JOIN, 'Transmitting data before join')
-    }
-    const opener = source.$joining.opener
-    if (opener === undefined || !opener.opened) {
-      source.$joining.source.send(IOJsonString.msgUnavailable())
-    }
-    opener.source.send(ioMsg.msgToOpener(source.$joining.id))
-  }
-
-  close (cb) {
-    if (this.server !== null) {
-      console.log('Server has stopped successfully')
-      this.server.close(cb)
-    }
+    return openers.values().next().value
   }
 }
