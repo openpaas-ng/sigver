@@ -31,8 +31,23 @@ module.exports = function(config) {
     },
 
     rollupPreprocessor: {
-      format: 'iife',
-      moduleName: 'sigver'
+      output: {
+        format: 'iife',
+        name: 'sigver'
+      },
+      plugins: [
+        require('rollup-plugin-re')({
+          patterns: [{
+            test: /eval.*\(moduleName\);/g,
+            replace: 'undefined;'
+          }]
+        }),
+        require('rollup-plugin-node-resolve')(),
+        require('rollup-plugin-commonjs')({
+          include: 'node_modules/**',
+          namedExports: { 'node_modules/protobufjs/minimal.js': [ 'Reader', 'Writer', 'util', 'roots' ] }
+        }),
+      ]
     },
 
 
@@ -60,8 +75,16 @@ module.exports = function(config) {
 
     // start these browsers
     // available browser launchers: https://npmjs.org/browse/keyword/karma-launcher
-    browsers: ['Chrome', 'Firefox'],
+    // browsers: ['Chrome', 'Firefox'],
 
+    browsers: ['ChromeHeadless', 'Firefox'],
+
+    customLaunchers: {
+      FirefoxHeadless: {
+        base: 'Firefox',
+        flags: [ '-headless' ],
+      },
+    },
 
     // Continuous Integration mode
     // if true, Karma captures browsers, runs the tests and exits
@@ -76,7 +99,7 @@ module.exports = function(config) {
    * Travis options
    */
   if (process.env.TRAVIS) {
-    config.browsers = ['Firefox']
+    config.browsers = ['ChromeHeadless', 'FirefoxHeadless']
     config.autoWatch = false
     config.singleRun = true
   }

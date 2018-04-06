@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+message Message {
+  oneof type {
+    Content content = 1;
+
+    // Server's response to the peer wanted to join a peer to peer network.
+    // True if the first peer in the network.
+    bool isFirst = 2; // Only outcoming message
+
+    // Peer's response to the server when he joined the group
+    // successfully and is ready to help other peers to join.
+    bool stable = 3; // Only incoming
+
+    // Server sends `heartbeat` message each 5 seconds and expects getting the
+    // same message back. If after 3 tentatives still no response then close the
+    // connection.
+    bool heartbeat = 4;
+
+    // Peer's request to try another group member for joining.
+    bool tryAnother = 5; // Only incoming
+  }
+}
+
+message Content {
+  uint32 id = 1; // Peer id to route data.
+
+  // Data to be transmitted to the sibling peer
+  oneof type {
+    bytes data = 2; // WebRTC data (in fact could be any array of bytes)
+    bool isError = 3; // Indicating that error occurred and thus signaling unsubscribes from the problematic peer
+    bool isEnd = 4; // Indicating that the peer finished to send all data to another peer
+  }
+}

@@ -1,7 +1,6 @@
 # <p align="center">Sigver</p>
 <p align="center">
-Signaling server for WebRTC.
-<br />Can listen on <strong style="font-weight: bold">WebSocket</strong> or <strong style="font-weight: bold">Server-Sent-Event</strong>.
+Signaling server for WebRTC listening on <strong style="font-weight: bold">WebSocket</strong>.
 <br />Used by <strong style="font-weight: bold">Netflux</strong>, Javascript client and server side transport API for creating a peer to peer network.
 <p>
 <p align="center">
@@ -22,81 +21,88 @@ Signaling server for WebRTC.
   </a>
 <p>
 
-## How to use
-```sh
+## Install
+```shell
 npm install -g sigver
-sigver [options]
-```
-### Options
-    --help              output usage information
-    -v, --version       output the version number
-    -h, --host <n>      select host address to bind to, DEFAULT: process.env.NODE_IP || "0.0.0.0"
-    -p, --port <n>      select port to use, DEFAULT: process.env.NODE_PORT || 8000
-    -t, --type <value>  specify the server type. The possible values are:
-      ws - for WebSocket only ("ws://host:port"). This is DEFAULT
-      sse - for Server-Sent-Event only ("http://host:port")
-
-### Examples
-```sh
-$ sigver                         # Server is listening on ws://0.0.0.0:8000
-$ sigver -h 192.168.0.1 -p 9000  # Server is listening on ws://192.168.0.1:9000
-$ sigver -t sse -p 9000          # Server is listening on http://0.0.0.0:9000
 ```
 
-## Protocol for WebSocket server
-Message is a JSON string. We call **Opener** a client who is waiting for
-a WebRTC offer. He provides a key to the server and maintains the socket connection with him. And we call **Joining** a client who provides a key to the server as **Opener** does and the offer. If the key is valid (corresponds to one of the **Opener**'s keys), then **Opener** receives
-the **Joining**'s offer and sends him the answer. Then **Opener** and **Joining**
-transmit each other a few ice candidates via the server. Normally after the RTCDataChannel has been established between the **Opener** and the **Joining**, **Joining** closes the socket connection with the server.
+Sigver is built on top of [µWebSockets](https://github.com/uNetworking/uWebSockets) server. µWebSockets will try te recompile itself during installation. If this fails it will silently fall back to using the precompiled binaries. If this fails too, then please check the project's repository.
 
-### Server income messages
-#### From **Opener**
-- When you want to establish a connection with someone (you need to provide him the key and wait until he sends the `join` message to the server).
-```json
- { "open": "[some unique key]" }
-```
-- When you want to forward `data` to the **Joining** identified by `id`.
-```json
-{ "id": "[identifier]", "data": "[answer, candidate...]" }
-```
+## Run
+```shell
+Usage: server [options]
+
+Signaling server for WebRTC. Used by Netflux API (https://coast-team.github.io/netflux/)
 
 
-#### From **Joining**
-- When you want to interchange WebRTC data with the **Opener** in order to establish an RTCDataChannel.
-```json
-{ "join": "[key provided by the peer who triggered connection]" }
-```
-- When you want to forward `data` to the **Opener**.
-```json
- { "data": "[offer, candidate...]" }
+Options:
+
+  -V, --version           output the version number
+  -h, --host <ip>         Select host address to bind to. (default: 0.0.0.0)
+  -p, --port <number>     Select port to use. (default: 8000)
+  -k, --key <file path>   Private key for the certificate
+  -c, --cert <file path>  The server certificate
+  -a, --ca <file path>    The additional intermediate certificate or certificates that web browsers will need in order to validate the server certificate.
+  -h, --help              output usage information
+
+Examples:
+
+   $ sigver                       # Server is listening on ws://0.0.0.0:8000
+   $ sigver -h 192.168.0.1 -p 80  # Server is listening on ws://192.168.0.1:80
+   $ sigver --key ./private.key --cert ./primary.crt --ca ./intermediate.crt --port 443  # Server is listening on wss://0.0.0.0:443
 ```
 
-### Server outcome messages
-#### To **Opener** & **Joining**
-- Response to ̀`{"open":...}` and `{"join":...}` messages.
-```json
- { "isKeyOk": "[true|false]" }
+## How to use
+Assuming that the server is listening on `wss://mysigver.org`, then the server only accepts
+`wss://mysigver.org/:key` where **key** is any valid string less than 512 characters (key identifies peer-to-peer network). For example:
+
+`wss://mysigver.org/Lt71z0rspEqBKoConPJpr3NoODiO0kgAtM3fYc3VLH`
+
+
+
+## Server protocol
+Server uses [Protocol Buffers](https://developers.google.com/protocol-buffers/) for encode/decode all messages.
+
+```
+syntax = "proto3";
+
+message Message {
+  oneof type {
+    Content content = 1;
+
+    // Server's response to the peer wanted to join a peer to peer network.
+    // True if the first peer in the network.
+    bool isFirst = 2; // Only outcoming message
+
+    // Peer's response to the server when he joined the group
+    // successfully and is ready to help other peers to join.
+    bool stable = 3; // Only incoming
+
+    // Server sends `heartbeat` message each 5 seconds and expects getting the
+    // same message back. If after 3 tentatives still no response then close the
+    // connection.
+    bool heartbeat = 4;
+
+    // Peer's request to try another group member for joining.
+    bool tryAnother = 5; // Only incoming
+  }
+}
+
+message Content {
+  uint32 id = 1; // Peer id to route data.
+
+  // Data to be transmitted to the sibling peer
+  oneof type {
+    bytes data = 2; // WebRTC data (in fact could be any array of bytes)
+    bool isError = 3; // Indicating that error occurred and thus signaling unsubscribes from the problematic peer
+    bool isEnd = 4; // Indicating that the peer finished to send all data to another peer
+  }
+}
 ```
 
-#### To **Opener**
-- Server forwards `data` from the **Joining** identified by `id`.
-```json
- { "id": "[identifier of the peer wishing to join]",
-   "data": "[offer, candidate]" }
-```
-- Server notifies **Opener** that the **Joining** identified by `id` is no longer available.
-```json
- { "id": "[identifier of the unavailable peer]", "unavailable": "true" }
-```
+Server may close the socket with the following codes:
 
-#### To **Joining**
-- Server forwards `data` from the **Opener**.
-```json
- { "data": "[answer, candidate]" }
-```
-
-## Protocol for Server-Sent-Event server
-
-  Very similar to the WebSocket protocol, but has some significant differences.
-
-  Discription to come...
+- **ERR_KEY: 4001**               // Inappropriate key format (e.g. key too long)
+- **ERR_HEARTBEAT = 4002**        // Heart-beats error
+- **ERR_MESSAGE = 4003**          // Any error due to message: type, format etc.
+- **ERR_BLOCKING_MEMBER** = 4004  // When only one member left in the group and new peers could not join via him.
