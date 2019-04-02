@@ -9,14 +9,15 @@ branches:
   except:
     - "/^v\\d+\\.\\d+\\.\\d+$/"
 addons:
-  firefox: "latest"
+  firefox: 'latest'
   apt:
     packages:
       - google-chrome-stable
 language: node_js
 node_js:
   - '8'
+  - '10'
 script:
   - npm test
 after_success:
-  - ./node_modules/.bin/semantic-release
+  - npm run travis-deploy-once "npm run semantic-release"

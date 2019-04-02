@@ -1,22 +1,18 @@
 import * as $protobuf from "protobufjs";
-
 /** Properties of a Message. */
 export interface IMessage {
-
-    /** Message content */
-    content?: (IContent|null);
-
-    /** Message isFirst */
-    isFirst?: (boolean|null);
-
-    /** Message stable */
-    stable?: (boolean|null);
 
     /** Message heartbeat */
     heartbeat?: (boolean|null);
 
-    /** Message tryAnother */
-    tryAnother?: (boolean|null);
+    /** Message content */
+    content?: (IContent|null);
+
+    /** Message connect */
+    connect?: (IGroupData|null);
+
+    /** Message connected */
+    connected?: (boolean|null);
 }
 
 /** Represents a Message. */
@@ -28,23 +24,20 @@ export class Message implements IMessage {
      */
     constructor(properties?: IMessage);
 
-    /** Message content. */
-    public content?: (IContent|null);
-
-    /** Message isFirst. */
-    public isFirst: boolean;
-
-    /** Message stable. */
-    public stable: boolean;
-
     /** Message heartbeat. */
     public heartbeat: boolean;
 
-    /** Message tryAnother. */
-    public tryAnother: boolean;
+    /** Message content. */
+    public content?: (IContent|null);
+
+    /** Message connect. */
+    public connect?: (IGroupData|null);
+
+    /** Message connected. */
+    public connected: boolean;
 
     /** Message type. */
-    public type?: ("content"|"isFirst"|"stable"|"heartbeat"|"tryAnother");
+    public type?: ("heartbeat"|"content"|"connect"|"connected");
 
     /**
      * Creates a new Message instance using the specified properties.
@@ -75,17 +68,17 @@ export class Message implements IMessage {
 /** Properties of a Content. */
 export interface IContent {
 
-    /** Content id */
-    id?: (number|null);
+    /** Content senderId */
+    senderId?: (number|null);
+
+    /** Content recipientId */
+    recipientId?: (number|null);
+
+    /** Content lastData */
+    lastData?: (boolean|null);
 
     /** Content data */
     data?: (Uint8Array|null);
-
-    /** Content isError */
-    isError?: (boolean|null);
-
-    /** Content isEnd */
-    isEnd?: (boolean|null);
 }
 
 /** Represents a Content. */
@@ -97,20 +90,17 @@ export class Content implements IContent {
      */
     constructor(properties?: IContent);
 
-    /** Content id. */
-    public id: number;
+    /** Content senderId. */
+    public senderId: number;
+
+    /** Content recipientId. */
+    public recipientId: number;
+
+    /** Content lastData. */
+    public lastData: boolean;
 
     /** Content data. */
     public data: Uint8Array;
-
-    /** Content isError. */
-    public isError: boolean;
-
-    /** Content isEnd. */
-    public isEnd: boolean;
-
-    /** Content type. */
-    public type?: ("data"|"isError"|"isEnd");
 
     /**
      * Creates a new Content instance using the specified properties.
@@ -136,4 +126,55 @@ export class Content implements IContent {
      * @throws {$protobuf.util.ProtocolError} If required fields are missing
      */
     public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): Content;
+}
+
+/** Properties of a GroupData. */
+export interface IGroupData {
+
+    /** GroupData id */
+    id?: (number|null);
+
+    /** GroupData members */
+    members?: (number[]|null);
+}
+
+/** Represents a GroupData. */
+export class GroupData implements IGroupData {
+
+    /**
+     * Constructs a new GroupData.
+     * @param [properties] Properties to set
+     */
+    constructor(properties?: IGroupData);
+
+    /** GroupData id. */
+    public id: number;
+
+    /** GroupData members. */
+    public members: number[];
+
+    /**
+     * Creates a new GroupData instance using the specified properties.
+     * @param [properties] Properties to set
+     * @returns GroupData instance
+     */
+    public static create(properties?: IGroupData): GroupData;
+
+    /**
+     * Encodes the specified GroupData message. Does not implicitly {@link GroupData.verify|verify} messages.
+     * @param message GroupData message or plain object to encode
+     * @param [writer] Writer to encode to
+     * @returns Writer
+     */
+    public static encode(message: IGroupData, writer?: $protobuf.Writer): $protobuf.Writer;
+
+    /**
+     * Decodes a GroupData message from the specified reader or buffer.
+     * @param reader Reader or buffer to decode from
+     * @param [length] Message length if known beforehand
+     * @returns GroupData
+     * @throws {Error} If the payload is not a reader or valid buffer
+     * @throws {$protobuf.util.ProtocolError} If required fields are missing
+     */
+    public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): GroupData;
 }

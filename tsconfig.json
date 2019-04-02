@@ -1,19 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "module": "ES2015",
+    "module": "commonjs",
     "outDir": "dist/",
-    "lib": ["ES2017"],
+    "lib": ["es2017"],
     "moduleResolution": "node",
-    "allowJs": false,
+    "allowJs": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
+    "noFallthroughCasesInSwitch": true
   },
-  "include": [
-    "src/**/*"
-  ],
+  "include": ["src/**/*"],
   "exclude": ["src/proto/**/*", "**/Message.d.ts", "src/sseserver_depricated/*"]
 }

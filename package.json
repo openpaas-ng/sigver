@@ -1,29 +1,29 @@
 {
   "name": "sigver",
-  "description": "WebRTC signaling server based on WebSocket and Server-Sent-Event",
+  "description": "Signaling server for Netflux API based on WebSocket",
   "version": "0.0.0-development",
-  "main": "server.js",
-  "jsnext:main": "src/WSServer.js",
+  "main": "dist/server.js",
   "bin": {
-    "sigver": "server.js"
+    "sigver": "dist/server.js"
   },
   "files": [
-    "server.js"
+    "dist/"
   ],
   "engines": {
     "node": ">=8.1.4"
   },
   "scripts": {
-    "dev": "npm run proto && npm run build && node server.js --host 0.0.0.0 --port 8010 | bunyan",
-    "lint": "tslint src/*.ts src/**/*.ts -e 'src/**/*.proto' -e 'src/**/*.d.ts'",
-    "build": "rollup -c",
+    "dev": "nodemon -e ts -w ./src -x ts-node ./src/index.ts -- --port 8010 | bunyan",
+    "lint": "tslint --fix -p tsconfig.json && prettier --write --list-different 'src/**/*.ts' 'test/**/*.{js}' './*.{ts,js,json,md}' && markdownlint ./*.md",
+    "build": "npm run proto && webpack",
     "proto": "pbjs -t static-module --es6 -w es6 --no-verify --no-delimited --no-convert -o src/proto/index.js src/proto/index.proto && pbts src/proto/index.js -o src/proto/index.d.ts",
-    "pretest": "npm run build && pm2 gracefulReload process.yml",
-    "test": "karma start karma.conf.js",
-    "test:chrome": "npm run test -- --browsers Chrome",
-    "precommit": "npm run lint && npm test -- --no-auto-watch --single-run",
+    "pretest": "npm run build && pm2 restart process.yml",
+    "test": "karma start",
+    "test:chrome": "karma start --browsers Chrome",
+    "precommit": "lint-staged && npm test -- --no-auto-watch --single-run",
     "commitmsg": "validate-commit-msg",
     "cz": "git-cz",
+    "travis-deploy-once": "travis-deploy-once",
     "semantic-release": "semantic-release"
   },
   "keywords": [
@@ -33,7 +33,7 @@
     "signaling",
     "server"
   ],
-  "author": "Philippe Kalitine <philippe.kalitine@gmail.com> (http://philippe.kalitine.name/)",
+  "author": "Philippe Kalitine <philippe.kalitine@gmail.com> (https://philippe.kalitine.name/)",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -41,42 +41,64 @@
   },
   "dependencies": {
     "bunyan": "^1.8.12",
-    "commander": "^2.13.0",
+    "commander": "^2.18.0",
     "protobufjs": "^6.8.5",
-    "rxjs": "^5.5.6",
-    "uws": "^9.14.0"
+    "rxjs": "^6.3.2",
+    "uws": "10.148.1"
   },
-  "peerDependencies": {},
   "devDependencies": {
     "@types/bunyan": "^1.8.4",
+    "@types/commander": "^2.12.2",
     "@types/uws": "^0.13.1",
-    "commitizen": "^2.5.0",
+    "commitizen": "^2.10.1",
     "cz-conventional-changelog": "^2.1.0",
     "husky": "^0.14.3",
-    "jasmine": "^3.0.0",
+    "jasmine": "^3.2.0",
     "jasmine-spec-reporter": "^4.2.1",
-    "karma": "^2.0.0",
+    "karma": "^3.0.0",
     "karma-chrome-launcher": "^2.1.1",
     "karma-firefox-launcher": "^1.1.0",
-    "karma-jasmine": "^1.1.1",
-    "karma-rollup-preprocessor": "^5.1.1",
+    "karma-jasmine": "^1.1.2",
     "karma-spec-reporter": "0.0.32",
-    "pm2": "^2.10.1",
-    "rollup": "^0.56.2",
-    "rollup-plugin-commonjs": "^8.2.6",
-    "rollup-plugin-filesize": "^1.5.0",
-    "rollup-plugin-node-resolve": "^3.0.2",
-    "rollup-plugin-re": "^1.0.6",
-    "rollup-plugin-typescript2": "^0.11.1",
-    "semantic-release": "^12.2.4",
-    "tslint": "^5.9.1",
-    "tslint-eslint-rules": "^5.0.0",
-    "typescript": "~2.6.2",
-    "validate-commit-msg": "^2.14.0"
+    "karma-webpack": "^3.0.3",
+    "lint-staged": "^7.2.2",
+    "markdownlint-cli": "^0.13.0",
+    "nodemon": "^1.18.4",
+    "pm2": "^3.0.4",
+    "prettier": "^1.14.2",
+    "semantic-release": "^15.9.12",
+    "travis-deploy-once": "^5.0.7",
+    "ts-loader": "^5.0.0",
+    "ts-node": "^7.0.1",
+    "tslint": "^5.10.0",
+    "tslint-config-prettier": "^1.15.0",
+    "typescript": "~3.0.3",
+    "validate-commit-msg": "^2.14.0",
+    "webpack": "^4.17.2",
+    "webpack-cli": "^3.0.0",
+    "webpack-node-externals": "^1.7.2"
   },
   "config": {
     "commitizen": {
       "path": "node_modules/cz-conventional-changelog"
     }
+  },
+  "lint-staged": {
+    "linters": {
+      "*.md": [
+        "prettier --write --list-different",
+        "git add",
+        "markdownlint"
+      ],
+      "*.ts": [
+        "tslint --fix -p tsconfig.json -e src/proto/*",
+        "git add"
+      ],
+      "*.{ts,json,scss,css}": [
+        "prettier --write --list-different",
+        "git add"
+      ]
+    },
+    "concurrent": false
   }
 }
